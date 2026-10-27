@@ -1,14 +1,18 @@
-import {
-  render,
-  screen,
-  fireEvent,
-  waitFor,
-} from '@testing-library/react-native';
+import { render, screen, fireEvent, waitFor, act } from '@test-utils';
 import ChapterDrawer from '..';
 
 const mockUseNovelValue = jest.fn();
 const mockUseNovelActions = jest.fn();
 const mockUseChapterContext = jest.fn();
+const mockScrollToIndex = jest.fn();
+const mockScrollToEnd = jest.fn();
+const mockLegendProps = jest.fn();
+
+jest.mock('@hooks/persisted/useTheme');
+jest.mock('@gorhom/bottom-sheet', () => ({
+  BottomSheetModalProvider: ({ children }: { children: React.ReactNode }) =>
+    children,
+}));
 
 jest.mock('@screens/novel/NovelContext', () => ({
   useNovelValue: (key: string) => mockUseNovelValue(key),
@@ -32,6 +36,7 @@ jest.mock('@hooks/persisted', () => ({
 }));
 
 jest.mock('react-native-safe-area-context', () => ({
+  ...require('react-native-safe-area-context/jest/mock').default,
   useSafeAreaInsets: () => ({ bottom: 0 }),
 }));
 
@@ -71,23 +76,32 @@ jest.mock('@legendapp/list/react-native', () => {
   const { Pressable, Text, View } = require('react-native');
 
   return {
-    LegendList: ({ data = [], renderItem, onEndReached }: any) =>
-      React.createElement(
-        View,
-        null,
-        ...data.map((item: any, index: number) =>
-          React.createElement(
-            React.Fragment,
-            { key: item.id ?? index },
-            renderItem({ item, index }),
+    LegendList: React.forwardRef(
+      ({ data = [], renderItem, onEndReached, ...props }: any, ref: any) => {
+        'use no memo';
+        mockLegendProps(props);
+        React.useImperativeHandle(ref, () => ({
+          scrollToIndex: mockScrollToIndex,
+          scrollToEnd: mockScrollToEnd,
+        }));
+        return React.createElement(
+          View,
+          null,
+          ...data.map((item: any, index: number) =>
+            React.createElement(
+              React.Fragment,
+              { key: item.id ?? index },
+              renderItem({ item, index }),
+            ),
           ),
-        ),
-        React.createElement(
-          Pressable,
-          { testID: 'legend-end-reached', onPress: () => onEndReached?.() },
-          React.createElement(Text, null, 'end'),
-        ),
-      ),
+          React.createElement(
+            Pressable,
+            { testID: 'legend-end-reached', onPress: () => onEndReached?.() },
+            React.createElement(Text, null, 'end'),
+          ),
+        );
+      },
+    ),
   };
 });
 
@@ -157,4 +171,60 @@ describe('ChapterDrawer (task 12 context boundary cutover)', () => {
 
     expect(store.state.getNextChapterBatch).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['positionAsc', 'positionDesc'])(
+    'scrolls to the top, bottom, and current row in %s order',
+    sort => {
+      const chapters = Array.from({ length: 8 }, (_, index) =>
+        makeChapter(index + 1),
+      );
+      if (sort.endsWith('Desc')) chapters.reverse();
+      const store = createStore({
+        chapters,
+        novelSettings: { sort, filter: [] },
+      });
+      mockUseChapterContext.mockReturnValue({
+        chapter: chapters[4],
+        getChapter: jest.fn(),
+        setLoading: jest.fn(),
+      });
+      mockUseNovelValue.mockImplementation(
+        (key: keyof typeof store.state) => store.state[key],
+      );
+      mockUseNovelActions.mockReturnValue(store.state);
+      render(<ChapterDrawer />);
+
+      fireEvent.press(
+        screen.getByTestId('btn-readerScreen.drawer.scrollToTop'),
+      );
+      expect(mockScrollToIndex).toHaveBeenLastCalledWith({
+        index: 0,
+        animated: true,
+      });
+      fireEvent.press(
+        screen.getByTestId('btn-readerScreen.drawer.scrollToBottom'),
+      );
+      expect(mockScrollToEnd).toHaveBeenCalledWith({ animated: true });
+
+      for (const [visibleIndex, buttonIndex] of [
+        [0, 1],
+        [7, 0],
+      ]) {
+        act(() => {
+          mockLegendProps.mock.lastCall[0].onViewableItemsChanged({
+            viewableItems: [{ index: visibleIndex }],
+          });
+        });
+        const buttons = screen.getAllByTestId(/^btn-/);
+        expect(buttons[buttonIndex].props.testID).toBe(
+          'btn-readerScreen.drawer.scrollToCurrentChapter',
+        );
+        fireEvent.press(buttons[buttonIndex]);
+        expect(mockScrollToIndex).toHaveBeenLastCalledWith({
+          index: 2,
+          animated: true,
+        });
+      }
+    },
+  );
 });

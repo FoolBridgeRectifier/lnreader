@@ -231,7 +231,8 @@ export const ChapterContent = ({
       webViewRef?.current?.injectJavaScript(
         !pageReader
           ? `(()=>{
-                window.scrollTo({top:0,behavior:'smooth'})
+                if (window.continuousReader?.enabled) window.continuousReader.start();
+                else window.scrollTo({top:0,behavior:'smooth'});
               })()`
           : `(()=>{
               window.pageReader?.movePage(0);

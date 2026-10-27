@@ -547,6 +547,11 @@ export interface StringMap {
   'novelScreen.updatedToast': 'string';
   'readerScreen.bottomSheet.alignCenter': 'string';
   'readerScreen.bottomSheet.chapterTextFilters': 'string';
+  'readerScreen.bottomSheet.continuousReading': 'string';
+  'readerScreen.bottomSheet.continuousReadingDescription': 'string';
+  'readerScreen.bottomSheet.loadingChapter': 'string';
+  'readerScreen.bottomSheet.chapterLoadFailed': 'string';
+  'readerScreen.bottomSheet.endOfNovel': 'string';
   'readerScreen.bottomSheet.chapterTextFiltersDescription': 'string';
   'readerScreen.bottomSheet.filterText': 'string';
   'readerScreen.bottomSheet.alignJustify': 'string';
@@ -599,6 +604,8 @@ export interface StringMap {
   'readerScreen.emptyChapterMessage': 'string';
   'readerScreen.finished': 'string';
   'readerScreen.nextChapter': 'string';
+  'readerScreen.nextChapterButton': 'string';
+  'readerScreen.previousChapterButton': 'string';
   'readerScreen.noNextChapter': 'string';
   'readerScreen.noPreviousChapter': 'string';
   'readerScreen.searchMinLength': 'string';

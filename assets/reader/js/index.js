@@ -21,7 +21,8 @@ const onScrollRatio = (() => {
         queued = false;
         const ratio = Math.min(
           1,
-          (window.scrollY + reader.layoutHeight) / reader.chapterHeight,
+          reader.getScrollRatio?.() ??
+            (window.scrollY + reader.layoutHeight) / reader.chapterHeight,
         );
         for (const callback of callbacks) {
           callback(ratio);
@@ -36,7 +37,8 @@ const onScrollRatio = (() => {
 
 const ChapterEnding = () => {
   return () =>
-    reader.generalSettings.val.pageReader
+    reader.generalSettings.val.pageReader ||
+    reader.generalSettings.val.continuousReading
       ? div()
       : div(div({ class: 'info-text' }, reader.strings.finished), () =>
           // Reading `adjacentVersion` subscribes this binding to the adjacent
@@ -64,7 +66,9 @@ const Scrollbar = () => {
   const percentage = van.state(0);
   const update = ratio => {
     if (ratio === undefined) {
-      ratio = (window.scrollY + reader.layoutHeight) / reader.chapterHeight;
+      ratio =
+        reader.getScrollRatio?.() ??
+        (window.scrollY + reader.layoutHeight) / reader.chapterHeight;
     }
     if (ratio > 1) {
       ratio = 1;
@@ -77,6 +81,10 @@ const Scrollbar = () => {
     }
     percentage.val = parseInt(ratio * 100);
     if (lock) {
+      if (window.continuousReader?.enabled) {
+        window.continuousReader.seek(ratio);
+        return;
+      }
       window.scrollTo({
         top: reader.chapterHeight * ratio - reader.layoutHeight,
         behavior: 'instant',

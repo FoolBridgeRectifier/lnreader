@@ -97,7 +97,7 @@ export const useTtsSession = (content?: {
 
   const command = useCallback(
     (nextCommand: TtsCommand) => {
-      void run(session => {
+      return run(session => {
         switch (nextCommand) {
           case 'next':
             return session.skipNext();

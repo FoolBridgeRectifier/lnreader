@@ -65,6 +65,8 @@ export default function useChapter(
   const [chapter, setChapter] = useState(initialChapter);
   const [loading, setLoading] = useState(true);
   const [chapterText, setChapterText] = useState('');
+  // Scrolling changes the active chapter without replacing the WebView seed.
+  const [documentChapter, setDocumentChapter] = useState(initialChapter);
 
   const [[nextChapter, prevChapter], setAdjacentChapter] =
     useState<AdjacentChapters>(NO_ADJACENT_CHAPTERS);
@@ -75,6 +77,7 @@ export default function useChapter(
     useVolumeButtons,
     volumeButtonsOffset,
     pageReader,
+    continuousReading,
     pageReaderInvertVolumeButtons,
   } = useChapterGeneralSettings();
   const { incognitoMode } = useLibrarySettings();
@@ -104,6 +107,9 @@ export default function useChapter(
   const hiddenRef = useRef(hidden);
   /** Increments on every load so a superseded load can never publish state. */
   const loadIdRef = useRef(0);
+  const continuous = Boolean(continuousReading && !pageReader);
+  const modeRef = useRef(continuous);
+  const filtersRef = useRef(novelSettings?.chapterTextFilters);
 
   useEffect(() => {
     chapterRef.current = chapter;
@@ -240,6 +246,7 @@ export default function useChapter(
       page: string,
       direction: 'NEXT' | 'PREV',
       excludedScanlators: string[],
+      throwOnError = false,
     ) => {
       try {
         const count = await getChapterCount(chap.novelId, page);
@@ -257,7 +264,8 @@ export default function useChapter(
           chap.page ?? '',
           excludedScanlators,
         );
-      } catch {
+      } catch (cause) {
+        if (throwOnError) throw cause;
         return undefined;
       }
     },
@@ -272,7 +280,8 @@ export default function useChapter(
   const resolveAdjacentChapters = useCallback(
     async (chap: ChapterInfo, loadId: number) => {
       const excludedScanlators = excludedScanlatorsRef.current || [];
-      const isStale = () => loadId !== loadIdRef.current;
+      const isStale = () =>
+        loadId !== loadIdRef.current || chap.id !== chapterRef.current.id;
       const publish = (adjacent: AdjacentChapters) => {
         if (!isStale()) {
           setAdjacentChapter(adjacent);
@@ -362,6 +371,8 @@ export default function useChapter(
 
         const chap = dbChapter ?? requested;
         setChapter(chap);
+        chapterRef.current = chap;
+        setDocumentChapter(chap);
         setChapterText(html);
         setAdjacentChapter(NO_ADJACENT_CHAPTERS);
         setLoading(false);
@@ -377,6 +388,60 @@ export default function useChapter(
     },
     [loadChapterHtml, resolveAdjacentChapters],
   );
+
+  const loadAdjacentChapter = useCallback(
+    async (chap: ChapterInfo, direction: 'NEXT' | 'PREV') => {
+      const excluded = excludedScanlatorsRef.current || [];
+      const query = direction === 'NEXT' ? getNextChapter : getPrevChapter;
+      const adjacent = await query(
+        chap.novelId,
+        chap.position!,
+        chap.page ?? '',
+        excluded,
+      );
+      if (adjacent) return adjacent;
+      const page = Number(chap.page);
+      const target = page + (direction === 'NEXT' ? 1 : -1);
+      if (
+        target < 1 ||
+        (direction === 'NEXT' && target > (novel.totalPages ?? 0))
+      ) {
+        return undefined;
+      }
+      return loadPageBoundaryChapter(
+        chap,
+        String(target),
+        direction,
+        excluded,
+        true,
+      );
+    },
+    [loadPageBoundaryChapter, novel.totalPages],
+  );
+
+  const activateContinuousChapter = useCallback(
+    (chap: ChapterInfo) => {
+      chapterRef.current = chap;
+      setChapter(chap);
+      setAdjacentChapter(NO_ADJACENT_CHAPTERS);
+      void resolveAdjacentChapters(chap, loadIdRef.current);
+    },
+    [resolveAdjacentChapters],
+  );
+
+  useEffect(() => {
+    if (modeRef.current !== continuous) {
+      modeRef.current = continuous;
+      void getChapter();
+    }
+  }, [continuous, getChapter]);
+
+  useEffect(() => {
+    if (filtersRef.current !== novelSettings?.chapterTextFilters) {
+      filtersRef.current = novelSettings?.chapterTextFilters;
+      if (continuous) void getChapter();
+    }
+  }, [continuous, getChapter, novelSettings?.chapterTextFilters]);
 
   const searchChapterText = useCallback(
     (text: string) => {
@@ -409,10 +474,14 @@ export default function useChapter(
 
     scrollInterval.current = setInterval(() => {
       webViewRef.current?.injectJavaScript(`(()=>{
-        window.scrollBy({top:${defaultTo(
-          autoScrollOffset,
-          Dimensions.get('window').height,
-        )},behavior:'smooth'})
+        if (${Boolean(pageReader)} && window.pageReader) {
+          window.pageReader.movePage((window.pageReader.page?.val ?? 0) + 1);
+        } else {
+          window.scrollBy({top:${defaultTo(
+            autoScrollOffset,
+            Dimensions.get('window').height,
+          )},behavior:'smooth'});
+        }
       })()`);
     }, autoScrollInterval * 1000);
 
@@ -422,34 +491,47 @@ export default function useChapter(
         scrollInterval.current = null;
       }
     };
-  }, [autoScroll, autoScrollInterval, autoScrollOffset, webViewRef]);
+  }, [
+    autoScroll,
+    autoScrollInterval,
+    autoScrollOffset,
+    pageReader,
+    webViewRef,
+  ]);
 
-  const updateTracker = useCallback(() => {
-    const chapterNumber = parseChapterNumber(novel.name, chapter.name);
-    if (tracker && trackedNovel && chapterNumber > trackedNovel.progress) {
-      updateAllTrackedNovels({ progress: chapterNumber });
-    }
-  }, [chapter.name, novel.name, trackedNovel, tracker, updateAllTrackedNovels]);
+  const updateTracker = useCallback(
+    (target: ChapterInfo = chapter) => {
+      const chapterNumber = parseChapterNumber(novel.name, target.name);
+      if (tracker && trackedNovel && chapterNumber > trackedNovel.progress) {
+        updateAllTrackedNovels({ progress: chapterNumber });
+      }
+    },
+    [chapter, novel.name, trackedNovel, tracker, updateAllTrackedNovels],
+  );
 
   const markedReadRef = useRef<number | undefined>(undefined);
   const saveProgress = useCallback(
-    (percentage: number) => {
+    (percentage: number, target: ChapterInfo = chapter) => {
       if (!incognitoMode) {
-        updateChapterProgress(chapter.id, percentage > 100 ? 100 : percentage);
+        const progress = Math.max(0, Math.min(100, percentage));
+        updateChapterProgress(target.id, progress);
+        if (chapterRef.current.id === target.id) {
+          chapterRef.current = { ...chapterRef.current, progress };
+        }
 
         // Progress is reported repeatedly while reading the end of a chapter;
         // marking it read (and pushing it to the tracker, which is a network
         // call) only has to happen once.
-        if (percentage >= 97 && markedReadRef.current !== chapter.id) {
+        if (percentage >= 97 && markedReadRef.current !== target.id) {
           // a relative number
-          markedReadRef.current = chapter.id;
-          markChapterRead(chapter.id);
-          updateTracker();
+          markedReadRef.current = target.id;
+          markChapterRead(target.id);
+          updateTracker(target);
         }
       }
     },
     [
-      chapter.id,
+      chapter,
       incognitoMode,
       markChapterRead,
       updateChapterProgress,
@@ -475,6 +557,14 @@ export default function useChapter(
 
   const navigateChapter = useCallback(
     (position: 'NEXT' | 'PREV') => {
+      if (continuous) {
+        webViewRef.current?.injectJavaScript(
+          `window.continuousReader?.navigate(${JSON.stringify(
+            position,
+          )}); true;`,
+        );
+        return;
+      }
       const [next, prev] = adjacentChapterRef.current;
       const navChapter = position === 'NEXT' ? next : prev;
 
@@ -488,7 +578,7 @@ export default function useChapter(
         );
       }
     },
-    [getChapter],
+    [continuous, getChapter, webViewRef],
   );
 
   // Keep the history/last-read entry up to date, off the critical path of the
@@ -539,6 +629,12 @@ export default function useChapter(
   const chapterContext = useMemo(
     () => ({
       chapter,
+      documentChapter,
+      continuous,
+      loadChapterHtml,
+      loadAdjacentChapter,
+      activateContinuousChapter,
+      chapterTextCache,
       nextChapter,
       prevChapter,
       error,
@@ -560,6 +656,12 @@ export default function useChapter(
     }),
     [
       chapter,
+      documentChapter,
+      continuous,
+      loadChapterHtml,
+      loadAdjacentChapter,
+      activateContinuousChapter,
+      chapterTextCache,
       nextChapter,
       prevChapter,
       error,

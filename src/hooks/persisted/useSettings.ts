@@ -181,6 +181,7 @@ export interface ChapterGeneralSettings {
   keepScreenOn: boolean;
   fullScreenMode: boolean;
   pageReader: boolean;
+  continuousReading: boolean;
   swipeGestures: boolean;
   showScrollPercentage: boolean;
   useVolumeButtons: boolean;
@@ -308,6 +309,7 @@ export const initialChapterGeneralSettings: ChapterGeneralSettings = {
   keepScreenOn: true,
   fullScreenMode: true,
   pageReader: false,
+  continuousReading: false,
   swipeGestures: false,
   showScrollPercentage: true,
   useVolumeButtons: false,

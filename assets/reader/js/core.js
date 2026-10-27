@@ -140,6 +140,10 @@ window.reader = new (function () {
 
   document.onscrollend = () => {
     onUserInteraction();
+    if (window.continuousReader?.enabled) {
+      window.continuousReader.save();
+      return;
+    }
     if (!this.generalSettings.val.pageReader) {
       this.post({
         type: 'save',
@@ -432,7 +436,7 @@ window.tts = new (function () {
     this.reading = false;
     if (
       reader.readerSettings.val.tts?.autoPageAdvance === true &&
-      reader.nextChapter
+      (reader.nextChapter || window.continuousReader?.hasNext())
     ) {
       reader.post({ type: 'next', autoStartTTS: true });
       return;
@@ -725,6 +729,10 @@ let restoredScrollTop = null;
 let positionRestored = false;
 
 function calculatePages(behavior = 'instant') {
+  if (window.continuousReader?.enabled) {
+    window.continuousReader.restore();
+    return;
+  }
   reader.refresh();
 
   if (reader.generalSettings.val.pageReader) {
@@ -789,7 +797,11 @@ window.addEventListener('resize', () => {
  * someone who has already started reading.
  */
 const correctReadingPosition = () => {
-  if (reader.generalSettings.val.pageReader || restoredScrollTop === null) {
+  if (
+    window.continuousReader?.enabled ||
+    reader.generalSettings.val.pageReader ||
+    restoredScrollTop === null
+  ) {
     return;
   }
 
@@ -984,10 +996,9 @@ window.addEventListener('load', () => {
   // for nothing - which is exactly what happens when neither transform is on.
   let appliedHTML = reader.rawHTML;
 
-  van.derive(() => {
-    let html = reader.rawHTML;
+  const prepareReaderText = html => {
     if (reader.generalSettings.val.bionicReading) {
-      html = textVide.textVide(reader.rawHTML);
+      html = textVide.textVide(html);
     }
 
     if (reader.generalSettings.val.removeExtraParagraphSpacing) {
@@ -1011,6 +1022,18 @@ window.addEventListener('load', () => {
           '',
         );
     }
+
+    return html;
+  };
+  window.prepareReaderText = prepareReaderText;
+
+  van.derive(() => {
+    let html = reader.rawHTML;
+    if (window.continuousReader?.enabled) {
+      window.continuousReader.applyTextOptions();
+      return;
+    }
+    html = prepareReaderText(html);
     if (html === appliedHTML) {
       return;
     }

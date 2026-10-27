@@ -199,6 +199,10 @@ window.textRemover = new (function () {
  * paragraph spacing) doesn't re-introduce removed text on its next run.
  */
 window.textRemover.performRemove = function (text) {
+  if (window.continuousReader?.enabled) {
+    window.continuousReader.editText(text, '');
+    return;
+  }
   const el = document.querySelector('#LNReader-chapter');
   if (!el) return;
   const m = text.match(/^\/(.*)\/([gmiyuvsd]*)$/);
@@ -221,6 +225,10 @@ window.textRemover.performRemove = function (text) {
  * Also updates reader.rawHTML so the text-options deriver stays in sync.
  */
 window.textRemover.performReplace = function (from, to) {
+  if (window.continuousReader?.enabled) {
+    window.continuousReader.editText(from, to);
+    return;
+  }
   const el = document.querySelector('#LNReader-chapter');
   if (!el) return;
   const m = from.match(/^\/(.*)\/([gmiyuvsd]*)$/);

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { IconButton } from 'react-native-paper';
 import color from 'color';
 import Animated, {
@@ -10,6 +10,7 @@ import Animated, {
 import { useChapterContext } from '../ChapterContext';
 import { useTheme } from '@hooks/persisted';
 import { useNovelLayout } from '@screens/novel/NovelContext';
+import { getString } from '@i18n/translations';
 
 interface ChapterFooterProps {
   openReaderSheet: () => void;
@@ -66,13 +67,9 @@ const ChapterFooter = ({
   scrollToStart,
   openDrawer,
 }: ChapterFooterProps) => {
-  const { nextChapter, prevChapter, navigateChapter } = useChapterContext();
+  const { continuous, nextChapter, prevChapter, navigateChapter } =
+    useChapterContext();
   const theme = useTheme();
-  const rippleConfig = {
-    color: theme.rippleColor,
-    borderless: true,
-    radius: 50,
-  };
   const { navigationBarHeight } = useNovelLayout();
 
   const style = useMemo(
@@ -101,63 +98,53 @@ const ChapterFooter = ({
       style={[styles.footer, style]}
     >
       <View style={styles.buttonsContainer}>
-        <Pressable
-          android_ripple={rippleConfig}
-          style={styles.buttonStyles}
-          onPress={() => navigateChapter('PREV')}
-        >
+        <View style={styles.buttonStyles}>
           <IconButton
+            onPress={() => navigateChapter('PREV')}
+            accessibilityLabel={getString('readerScreen.previousChapterButton')}
             icon="chevron-left"
             size={26}
-            disabled={!prevChapter}
+            disabled={!continuous && !prevChapter}
             iconColor={theme.onSurface}
           />
-        </Pressable>
-        <Pressable
-          android_ripple={rippleConfig}
-          style={styles.buttonStyles}
-          onPress={() => scrollToStart()}
-        >
+        </View>
+        <View style={styles.buttonStyles}>
           <IconButton
+            onPress={scrollToStart}
+            accessibilityLabel={getString('readerScreen.drawer.scrollToTop')}
             icon="arrow-collapse-up"
             size={26}
             iconColor={theme.onSurface}
           />
-        </Pressable>
-        <Pressable
-          android_ripple={rippleConfig}
-          style={styles.buttonStyles}
-          onPress={() => openDrawer()}
-        >
+        </View>
+        <View style={styles.buttonStyles}>
           <IconButton
+            onPress={openDrawer}
+            accessibilityLabel={getString('common.chapters')}
             icon="format-list-bulleted"
             size={26}
             iconColor={theme.onSurface}
           />
-        </Pressable>
-        <Pressable
-          android_ripple={rippleConfig}
-          style={styles.buttonStyles}
-          onPress={openReaderSheet}
-        >
+        </View>
+        <View style={styles.buttonStyles}>
           <IconButton
+            onPress={openReaderSheet}
+            accessibilityLabel={getString('common.settings')}
             icon="cog-outline"
             size={26}
             iconColor={theme.onSurface}
           />
-        </Pressable>
-        <Pressable
-          android_ripple={rippleConfig}
-          style={styles.buttonStyles}
-          onPress={() => navigateChapter('NEXT')}
-        >
+        </View>
+        <View style={styles.buttonStyles}>
           <IconButton
+            onPress={() => navigateChapter('NEXT')}
+            accessibilityLabel={getString('readerScreen.nextChapterButton')}
             icon="chevron-right"
             size={26}
-            disabled={!nextChapter}
+            disabled={!continuous && !nextChapter}
             iconColor={theme.onSurface}
           />
-        </Pressable>
+        </View>
       </View>
     </Animated.View>
   );

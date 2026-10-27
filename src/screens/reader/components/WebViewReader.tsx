@@ -27,6 +27,10 @@ import { PLUGIN_STORAGE } from '@utils/Storages';
 import { useChapterContext } from '../ChapterContext';
 import { ReaderSearchResult } from '../types';
 import { useTtsSession } from '../hooks/useTtsSession';
+import {
+  useContinuousChapters,
+  ContinuousMessage,
+} from '../hooks/useContinuousChapters';
 import type { TtsSettings } from '@modules/nitro-tts';
 import { ChapterInfo } from '@database/types';
 import { Dialog } from '@components/Dialog';
@@ -133,6 +137,8 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
   const {
     novel,
     chapter,
+    documentChapter,
+    continuous,
     chapterText: html,
     navigateChapter,
     saveProgress,
@@ -149,7 +155,7 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
       ...initialChapterReaderSettings,
       ...getMMKVObject<ChapterReaderSettings>(CHAPTER_READER_SETTINGS),
     }), // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chapter.id],
+    [documentChapter.id],
   );
 
   const chapterGeneralSettings = useMemo(
@@ -159,7 +165,7 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
     }),
     // needed to preserve settings during chapter change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chapter.id],
+    [documentChapter.id, continuous],
   );
 
   const [batteryLevel] = useState(lastKnownBatteryLevel);
@@ -183,7 +189,10 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
     handleReplaceCancel,
     eventTextAction,
   } = useTextModifications(html, webViewRef);
+  const onContinuousMessage = useContinuousChapters();
 
+  // Continuous navigation keeps this document alive. Its browser controller
+  // stops speech before selecting a chapter and awaits native stop before replay.
   const {
     command: runTtsCommand,
     loadAndPlay,
@@ -191,7 +200,10 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
     seekTo: seekTts,
     state: ttsState,
     updateSettings: updateTtsSettings,
-  } = useTtsSession({ chapterId: chapter.id, html: processedHtml });
+  } = useTtsSession({
+    chapterId: continuous ? documentChapter.id : chapter.id,
+    html: processedHtml,
+  });
 
   const [readerSettings, setReaderSettings] = useState(
     () =>
@@ -309,7 +321,7 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
     // eslint-disable-next-line react-hooks/refs
     const isNextChapterScreenVisible = nextChapterScreenVisible.current;
     return {
-      baseUrl: !chapter.isDownloaded ? plugin?.site : undefined,
+      baseUrl: !documentChapter.isDownloaded ? plugin?.site : undefined,
       headers: plugin?.imageRequestInit?.headers,
       method: plugin?.imageRequestInit?.method,
       body: plugin?.imageRequestInit?.body,
@@ -376,7 +388,7 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
                   : 'translateX(0%)'
               };
               ${chapterGeneralSettings.pageReader ? '' : 'display: none'}"
-              ">${chapter.name}</div>
+              ">${documentChapter.name}</div>
               <div id="LNReader-chapter">
                 ${processedHtml}
               </div>
@@ -392,7 +404,7 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
                   readerSettings: initialReaderSettings,
                   chapterGeneralSettings,
                   novel,
-                  chapter,
+                  chapter: documentChapter,
                   batteryLevel,
                   autoSaveInterval: 2222,
                   DEBUG: __DEV__,
@@ -400,10 +412,19 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
                     finished:
                       getString('readerScreen.finished') +
                       ': ' +
-                      chapter.name.trim(),
+                      documentChapter.name.trim(),
                     noNextChapter: getString('readerScreen.noNextChapter'),
                     removeText: getString('common.remove'),
                     replaceText: getString('customCodeSettings.replace'),
+                    loadingChapter: getString(
+                      'readerScreen.bottomSheet.loadingChapter',
+                    ),
+                    chapterLoadFailed: getString(
+                      'readerScreen.bottomSheet.chapterLoadFailed',
+                    ),
+                    endOfNovel: getString(
+                      'readerScreen.bottomSheet.endOfNovel',
+                    ),
                   },
                 })}
               </script>
@@ -423,13 +444,15 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
                 document.querySelector('#LNReader-chapter').innerHTML = html;
               }
               document.addEventListener('DOMContentLoaded', fn);
+              window.applyContinuousCustomCode = function(html) { ${customJS}; return html; };
               </script>
+              <script src="${assetsUriPrefix}/js/continuous.js"></script>
           </html>
           `,
     };
   }, [
     batteryLevel,
-    chapter,
+    documentChapter,
     chapterGeneralSettings,
     processedHtml,
     customJS,
@@ -504,6 +527,31 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
           __DEV__ && onLogMessage(ev);
           const event: WebViewPostEvent = JSON.parse(ev.nativeEvent.data);
           switch (event.type) {
+            case 'continuous-ready':
+            case 'continuous-request':
+            case 'continuous-progress':
+            case 'continuous-release':
+              void onContinuousMessage(
+                event.type,
+                event.data as ContinuousMessage,
+              );
+              break;
+            case 'continuous-active': {
+              const data = event.data as ContinuousMessage;
+              void (async () => {
+                await onContinuousMessage(event.type, data);
+                if (data.autoStartTTS) {
+                  // A delayed native stop must not cancel the next chapter's queue.
+                  await runTtsCommand('stop');
+                  webViewRef.current?.injectJavaScript(
+                    `window.continuousReader?.startSpeech(${JSON.stringify(
+                      data.token,
+                    )}, ${JSON.stringify(data.chapterId)}); true;`,
+                  );
+                }
+              })();
+              break;
+            }
             case 'tts-queue': {
               const payload = event.data as
                 | { queue?: unknown; startIndex?: unknown }
@@ -562,6 +610,12 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
               refetch();
               break;
             case 'next':
+              if (continuous && event.autoStartTTS) {
+                webViewRef.current?.injectJavaScript(
+                  'window.continuousReader?.navigate("NEXT", true); true;',
+                );
+                break;
+              }
               nextChapterScreenVisible.current = true;
               if (event.autoStartTTS) {
                 autoStartTTSRef.current = true;
@@ -569,6 +623,12 @@ const WebViewReader: React.FC<WebViewReaderProps> = ({
               navigateChapter('NEXT');
               break;
             case 'prev':
+              if (continuous && event.autoStartTTS) {
+                webViewRef.current?.injectJavaScript(
+                  'window.continuousReader?.navigate("PREV", true); true;',
+                );
+                break;
+              }
               if (event.autoStartTTS) {
                 autoStartTTSRef.current = true;
               }

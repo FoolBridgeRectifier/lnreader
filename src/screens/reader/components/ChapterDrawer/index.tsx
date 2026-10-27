@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
-import { useAppSettings, useTheme } from '@hooks/persisted';
+import { useTheme } from '@hooks/persisted';
 import { Button, LoadingScreenV2 } from '@components/index';
 import IconButtonV2 from '@components/IconButtonV2/IconButtonV2';
 import { EdgeInsets, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -40,7 +40,6 @@ type ChapterDrawerProps = {
 const ChapterDrawer = ({ onClose }: ChapterDrawerProps) => {
   const { chapter, getChapter, setLoading } = useChapterContext();
   const chapters = useNovelValue('chapters');
-  const novelSettings = useNovelValue('novelSettings');
   const pages = useNovelValue('pages');
   const fetching = useNovelValue('fetching');
   const batchInformation = useNovelValue('batchInformation');
@@ -48,16 +47,12 @@ const ChapterDrawer = ({ onClose }: ChapterDrawerProps) => {
 
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const { defaultChapterSort } = useAppSettings();
   const listRef = useRef<LegendListRef | null>(null);
 
   const styles = useMemo(
     () => createStylesheet(theme, insets),
     [theme, insets],
   );
-
-  const { sort = defaultChapterSort } = novelSettings;
-  const listAscending = sort.endsWith('Asc');
 
   const defaultButtonLayout: ButtonsProperties = useMemo(
     () => ({
@@ -128,11 +123,7 @@ const ChapterDrawer = ({ onClose }: ChapterDrawerProps) => {
           index: currentScrollIndex,
         };
 
-        if (
-          listAscending
-            ? firstVisibleIndex < currentChapterIndex
-            : firstVisibleIndex > currentChapterIndex
-        ) {
+        if (firstVisibleIndex < currentChapterIndex) {
           newBtnLayout.down = currentChapterButton;
         } else {
           newBtnLayout.up = currentChapterButton;
@@ -141,12 +132,7 @@ const ChapterDrawer = ({ onClose }: ChapterDrawerProps) => {
 
       setButtonProperties(newBtnLayout);
     },
-    [
-      currentChapterIndex,
-      currentScrollIndex,
-      defaultButtonLayout,
-      listAscending,
-    ],
+    [currentChapterIndex, currentScrollIndex, defaultButtonLayout],
   );
 
   const openChapter = useCallback(

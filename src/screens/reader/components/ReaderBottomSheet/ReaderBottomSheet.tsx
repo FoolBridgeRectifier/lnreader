@@ -110,6 +110,11 @@ const displayPreferences: GeneralPreference[] = [
 
 const navigationPreferences: GeneralPreference[] = [
   {
+    key: 'continuousReading',
+    label: 'continuousReading',
+    description: 'continuousReadingDescription',
+  },
+  {
     key: 'autoScroll',
     label: 'autoscroll',
     description: 'autoscrollDescription',
@@ -155,8 +160,18 @@ const GeneralTab = React.memo((filterProps: ChapterTextFiltersProps) => {
     useChapterGeneralSettings();
 
   const toggleSetting = useCallback(
-    (key: keyof typeof settings) =>
-      setChapterGeneralSettings({ [key]: !settings[key] }),
+    (key: keyof typeof settings) => {
+      const enabled = !settings[key];
+      setChapterGeneralSettings({
+        [key]: enabled,
+        ...(enabled && key === 'continuousReading'
+          ? { pageReader: false }
+          : {}),
+        ...(enabled && key === 'pageReader'
+          ? { continuousReading: false }
+          : {}),
+      });
+    },
     [setChapterGeneralSettings, settings],
   );
 

@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import useChapter from '../useChapter';
 import NativeFile from '@modules/native-file';
 import NativeVolumeButtonListener from '@modules/native-volume-button-listener';
+import { runInNewContext } from 'node:vm';
 
 const mockUseNovelActions = jest.fn();
 const mockUseChapterGeneralSettings = jest.fn();
@@ -229,6 +230,117 @@ describe('useChapter', () => {
     );
   });
 
+  it('activates a continuous chapter without replacing the WebView document or seed text', async () => {
+    const store = createStore({ [initialChapter.id]: 'seed chapter' });
+    mockUseNovelActions.mockReturnValue(store.state);
+    mockUseChapterGeneralSettings.mockReturnValue({
+      continuousReading: true,
+      pageReader: false,
+      useVolumeButtons: false,
+    });
+    const { result } = renderHook(() => useFlatChapter(initialChapter));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const seed = result.current.documentChapter;
+    const second = makeChapter(2);
+    await act(async () => result.current.activateContinuousChapter(second));
+    expect(result.current.chapter.id).toBe(2);
+    expect(result.current.documentChapter).toBe(seed);
+    expect(result.current.chapterText).toBe('seed chapter');
+    act(() => result.current.saveProgress(99, second));
+    expect(store.state.markChapterRead).toHaveBeenCalledWith(2);
+    expect(store.state.updateChapterProgress).toHaveBeenCalledWith(2, 99);
+  });
+
+  it('uses scroll navigation in continuous mode instead of fetching a new document', async () => {
+    const store = createStore({ [initialChapter.id]: 'seed chapter' });
+    mockUseNovelActions.mockReturnValue(store.state);
+    mockUseChapterGeneralSettings.mockReturnValue({
+      continuousReading: true,
+      pageReader: false,
+      useVolumeButtons: false,
+    });
+    const injectJavaScript = jest.fn();
+    const ref = { current: { injectJavaScript } } as unknown as Parameters<
+      typeof useChapter
+    >[0];
+    const { result } = renderHook(
+      () => useChapter(ref, initialChapter, novel).chapterContext,
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.navigateChapter('NEXT'));
+    expect(injectJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining('continuousReader?.navigate("NEXT")'),
+    );
+    expect(result.current.documentChapter.id).toBe(initialChapter.id);
+  });
+
+  it('does not cancel an explicit chapter load when the old document reports another active section', async () => {
+    const second = makeChapter(2);
+    const selected = makeChapter(5);
+    const store = createStore({
+      [initialChapter.id]: 'seed',
+      [second.id]: 'second',
+    });
+    mockUseNovelActions.mockReturnValue(store.state);
+    mockUseChapterGeneralSettings.mockReturnValue({
+      continuousReading: true,
+      pageReader: false,
+      useVolumeButtons: false,
+    });
+    const { result } = renderHook(() => useFlatChapter(initialChapter));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const pending = createDeferred<string>();
+    mockFetchChapter.mockReturnValue(pending.promise);
+    let load!: Promise<void>;
+    await act(async () => {
+      load = result.current.getChapter(selected);
+    });
+    await act(async () => result.current.activateContinuousChapter(second));
+    await act(async () => {
+      pending.resolve('selected chapter');
+      await load;
+    });
+    expect(result.current.documentChapter.id).toBe(selected.id);
+    expect(result.current.chapter.id).toBe(selected.id);
+  });
+
+  it('surfaces continuous source-page failures for retry rather than reporting end-of-book', async () => {
+    const store = createStore({ [initialChapter.id]: 'seed chapter' });
+    mockUseNovelActions.mockReturnValue(store.state);
+    const { result } = renderHook(() => useFlatChapter(initialChapter));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    mockGetChapterCount.mockResolvedValue(0);
+    mockFetchPage.mockRejectedValue(new Error('Offline'));
+    await expect(
+      result.current.loadAdjacentChapter(initialChapter, 'NEXT'),
+    ).rejects.toThrow('Offline');
+  });
+
+  it('loads queued EPUB chapters from local storage without using a source plugin', async () => {
+    const localNovel = { ...novel, pluginId: 'local', isLocal: true };
+    const second = { ...makeChapter(2), isDownloaded: true };
+    const store = createStore({ [initialChapter.id]: 'EPUB seed' });
+    mockUseNovelActions.mockReturnValue(store.state);
+    mockGetNextChapter.mockResolvedValue(second);
+    (NativeFile.readFile as jest.Mock).mockResolvedValue('<p>EPUB chapter</p>');
+    const { result } = renderHook(
+      () =>
+        useChapter({ current: null }, initialChapter, localNovel)
+          .chapterContext,
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(
+      await result.current.loadAdjacentChapter(initialChapter, 'NEXT'),
+    ).toEqual(second);
+    expect(await result.current.loadChapterHtml(second)).toBe(
+      'SANITIZED:<p>EPUB chapter</p>',
+    );
+    expect(NativeFile.readFile).toHaveBeenCalledWith(
+      expect.stringContaining('/local/7/2/index.html'),
+    );
+    expect(mockFetchChapter).not.toHaveBeenCalled();
+  });
+
   it('renders a downloaded chapter from storage without touching the network', async () => {
     const store = createStore();
     mockUseNovelActions.mockReturnValue(store.state);
@@ -332,6 +444,44 @@ describe('useChapter', () => {
       initialChapter.name,
     );
     expect(updateAllTrackedNovels).toHaveBeenCalledWith({ progress: 5 });
+  });
+
+  it('tracks each completed continuous chapter using its own chapter number', async () => {
+    const store = createStore();
+    const updateAllTrackedNovels = jest.fn();
+    mockUseNovelActions.mockReturnValue(store.state);
+    mockUseTrackedNovel.mockReturnValue({
+      trackedNovel: { progress: 0 },
+      updateAllTrackedNovels,
+    });
+    mockUseChapterGeneralSettings.mockReturnValue({
+      continuousReading: true,
+      pageReader: false,
+      useVolumeButtons: false,
+    });
+    mockParseChapterNumber.mockImplementation(
+      (_novelName: string, chapterName: string) =>
+        Number(chapterName.replace('Chapter ', '')),
+    );
+    const { result } = renderHook(() => useFlatChapter(initialChapter));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      result.current.saveProgress(100, initialChapter);
+      result.current.activateContinuousChapter(nextChapter);
+    });
+    act(() => {
+      result.current.saveProgress(100, nextChapter);
+      result.current.saveProgress(100, nextChapter);
+    });
+
+    expect(updateAllTrackedNovels.mock.calls).toEqual([
+      [{ progress: 1 }],
+      [{ progress: 2 }],
+    ]);
+    expect(store.state.markChapterRead.mock.calls).toEqual([[1], [2]]);
+    expect(result.current.documentChapter.id).toBe(initialChapter.id);
+    expect(result.current.chapter.id).toBe(nextChapter.id);
   });
 
   it('sets error and drops the failed load from the cache so a retry refetches', async () => {
@@ -477,6 +627,101 @@ describe('useChapter', () => {
       expect.stringContaining('window.scrollBy'),
     );
   });
+
+  it.each([
+    { pageReader: false, continuousReading: false, inverted: false },
+    { pageReader: false, continuousReading: true, inverted: true },
+    { pageReader: true, continuousReading: false, inverted: false },
+    { pageReader: true, continuousReading: false, inverted: true },
+  ])('executes volume controls with %o', async settings => {
+    mockUseChapterGeneralSettings.mockReturnValue({
+      ...settings,
+      pageReaderInvertVolumeButtons: settings.inverted,
+      volumeButtonsOffset: 100,
+    });
+    const scrollBy = jest.fn();
+    const movePage = jest.fn();
+    const injectJavaScript = jest.fn((script: string) => {
+      runInNewContext(script, {
+        window: { scrollBy, pageReader: { page: { val: 2 }, movePage } },
+      });
+    });
+    const { result } = renderHook(() =>
+      useChapter(
+        { current: { injectJavaScript } as any },
+        initialChapter,
+        novel,
+      ),
+    );
+    await waitFor(() =>
+      expect(result.current.chapterContext.loading).toBe(false),
+    );
+    for (const event of ['VolumeUp', 'VolumeDown']) {
+      const listener = (
+        NativeVolumeButtonListener.addListener as jest.Mock
+      ).mock.calls.find(([name]) => name === event)![1];
+      act(() => listener());
+    }
+    expect(movePage.mock.calls).toEqual(
+      settings.pageReader ? (settings.inverted ? [[3], [1]] : [[1], [3]]) : [],
+    );
+    expect(scrollBy.mock.calls).toEqual(
+      settings.pageReader
+        ? []
+        : [
+            [{ top: -100, behavior: 'smooth' }],
+            [{ top: 100, behavior: 'smooth' }],
+          ],
+    );
+  });
+
+  it.each([false, true])(
+    'auto-scrolls in paged mode: %s and stops when disabled',
+    async pageReader => {
+      jest.useFakeTimers();
+      try {
+        const settings = {
+          autoScroll: true,
+          autoScrollInterval: 1,
+          autoScrollOffset: 100,
+          pageReader,
+        };
+        mockUseChapterGeneralSettings.mockReturnValue(settings);
+        const scrollBy = jest.fn();
+        const movePage = jest.fn();
+        const injectJavaScript = jest.fn((script: string) => {
+          runInNewContext(script, {
+            window: { scrollBy, pageReader: { page: { val: 2 }, movePage } },
+          });
+        });
+        const { result, rerender } = renderHook(() =>
+          useChapter(
+            { current: { injectJavaScript } as any },
+            initialChapter,
+            novel,
+          ),
+        );
+        await waitFor(() =>
+          expect(result.current.chapterContext.loading).toBe(false),
+        );
+        act(() => jest.advanceTimersByTime(1000));
+        expect(movePage.mock.calls).toEqual(pageReader ? [[3]] : []);
+        expect(scrollBy.mock.calls).toEqual(
+          pageReader ? [] : [[{ top: 100, behavior: 'smooth' }]],
+        );
+        mockUseChapterGeneralSettings.mockReturnValue({
+          ...settings,
+          autoScroll: false,
+        });
+        rerender({});
+        injectJavaScript.mockClear();
+        act(() => jest.advanceTimersByTime(2000));
+        expect(injectJavaScript).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
 
   it('inverts volume button directions in paged mode when pageReaderInvertVolumeButtons is enabled', async () => {
     const store = createStore();

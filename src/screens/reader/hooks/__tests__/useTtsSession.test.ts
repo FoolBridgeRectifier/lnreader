@@ -75,6 +75,46 @@ describe('useTtsSession', () => {
     });
   });
 
+  it('allows chapter auto-advance to wait for the old native queue to stop', async () => {
+    const { result } = renderHook(useTtsSession);
+    const session = await getNativeSession();
+    let finishStop!: () => void;
+    session.stop.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finishStop = resolve;
+        }),
+    );
+    let handoff!: Promise<void>;
+
+    act(() => {
+      handoff = (async () => {
+        await result.current.command('stop');
+        await result.current.loadAndPlay(
+          ['Next chapter'],
+          0,
+          { novelName: 'Novel', chapterName: 'Chapter 2' },
+          { rate: 1, pitch: 1 },
+        );
+      })();
+    });
+
+    await waitFor(() => expect(session.stop).toHaveBeenCalledTimes(1));
+    expect(session.load).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishStop();
+      await handoff;
+    });
+    expect(session.load).toHaveBeenCalledWith(
+      [{ id: '0', text: 'Next chapter' }],
+      0,
+      { novelName: 'Novel', chapterName: 'Chapter 2' },
+      { rate: 1, pitch: 1 },
+    );
+    expect(session.play).toHaveBeenCalledTimes(1);
+  });
+
   it('stops an existing speech queue when filters rebuild the same chapter', async () => {
     const { result, rerender } = renderHook(
       (content: { chapterId: number; html: string }) => useTtsSession(content),
